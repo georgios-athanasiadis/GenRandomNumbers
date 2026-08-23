@@ -97,8 +97,12 @@ void Error_Handler(void);
 #define OSC_OUT_GPIO_Port GPIOH
 #define OSC_IN_Pin GPIO_PIN_0
 #define OSC_IN_GPIO_Port GPIOH
+#define ARD_D0_Pin GPIO_PIN_9
+#define ARD_D0_GPIO_Port GPIOJ
 #define ARD_D7_Pin GPIO_PIN_0
 #define ARD_D7_GPIO_Port GPIOJ
+#define ARD_D1_Pin GPIO_PIN_8
+#define ARD_D1_GPIO_Port GPIOJ
 #define LED4_Pin GPIO_PIN_15
 #define LED4_GPIO_Port GPIOI
 #define OTG_HS_OverCurrent_Pin GPIO_PIN_1

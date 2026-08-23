@@ -204,8 +204,6 @@ void MX_USART1_UART_Init(void);
 #define PMOD_3_GPIO_Port GPIOC
 #define PMOD_2_Pin GPIO_PIN_3
 #define PMOD_2_GPIO_Port GPIOC
-#define ARD_D0_Pin GPIO_PIN_9
-#define ARD_D0_GPIO_Port GPIOJ
 #define QSPI_BK2_IO0_Pin GPIO_PIN_2
 #define QSPI_BK2_IO0_GPIO_Port GPIOH
 #define ETH_MDIO_Pin GPIO_PIN_2
@@ -214,8 +212,6 @@ void MX_USART1_UART_Init(void);
 #define ETH_REF_CLK_GPIO_Port GPIOA
 #define FMC_D7_Pin GPIO_PIN_10
 #define FMC_D7_GPIO_Port GPIOE
-#define ARD_D1_Pin GPIO_PIN_8
-#define ARD_D1_GPIO_Port GPIOJ
 #define ARD_D6_Pin GPIO_PIN_7
 #define ARD_D6_GPIO_Port GPIOJ
 #define ARD_D9_Pin GPIO_PIN_6
