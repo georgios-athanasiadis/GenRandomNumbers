@@ -758,19 +758,11 @@ static void taskSDcard(void *argument)
 
   (void)argument;
 
-  /*
-   * После MX_FATFS_Init() SDPath обычно содержит "0:".
-   * Итоговый путь будет "0:/file01.txt".
-   */
   (void)snprintf(filePath, sizeof(filePath),
                  "%s/file01.txt", SDPath);
 
   for (;;)
   {
-    /*
-     * Монтирование выполняется из RTOS-задачи, то есть уже после запуска
-     * планировщика. Это необходимо для текущего RTOS-драйвера SD.
-     */
     result = f_mount(&SDFatFS, SDPath, 1U);
     if (result != FR_OK)
     {
@@ -778,28 +770,8 @@ static void taskSDcard(void *argument)
       continue;
     }
 
-    /*
-     * Если файл существует — перейти в его конец.
-     * Если файла нет — создать его.
-     */
-    result = f_open(&SDFile,
-                    filePath,
-                    FA_WRITE | FA_OPEN_APPEND);
-
-    if (result != FR_OK)
-    {
-      (void)f_mount(NULL, SDPath, 1U);
-      osDelay(1000U);
-      continue;
-    }
-
     for (;;)
     {
-      /*
-       * При ошибке записи pendingLog остаётся равным 1:
-       * задача не извлекает следующую структуру, пока не повторит
-       * попытку сохранения текущей.
-       */
       if (pendingLog == 0U)
       {
         if (osMessageQueueGet(sdCardQueueHandle,
@@ -820,8 +792,7 @@ static void taskSDcard(void *argument)
                           log.numbers[3],
                           log.numbers[4]);
 
-        if ((length <= 0) ||
-            ((size_t)length >= sizeof(line)))
+        if ((length <= 0) || ((size_t)length >= sizeof(line)))
         {
           continue;
         }
@@ -829,34 +800,39 @@ static void taskSDcard(void *argument)
         pendingLog = 1U;
       }
 
-      bytesWritten = 0U;
-
-      result = f_write(&SDFile,
-                       line,
-                       (UINT)length,
-                       &bytesWritten);
-
-      if ((result == FR_OK) &&
-          (bytesWritten == (UINT)length))
+      result = f_open(&SDFile, filePath, FA_WRITE | FA_OPEN_APPEND);
+      if (result == FR_OK)
       {
-        /*
-         * Физически сбросить строку на карту после каждой записи.
-         */
-        result = f_sync(&SDFile);
-      }
+        bytesWritten = 0U;
 
-      if ((result == FR_OK) &&
-          (bytesWritten == (UINT)length))
-      {
-        pendingLog = 0U;
-        continue;
+        result = f_write(&SDFile,
+                         line,
+                         (UINT)length,
+                         &bytesWritten);
+
+        if ((result == FR_OK) &&
+            (bytesWritten == (UINT)length))
+        {
+          /*
+           * f_close выполняет f_sync: записывает данные и FAT на карту.
+           */
+          result = f_close(&SDFile);
+
+          if (result == FR_OK)
+          {
+            pendingLog = 0U;
+            continue;
+          }
+        }
+        else
+        {
+          (void)f_close(&SDFile);
+        }
       }
 
       /*
-       * Карта могла быть извлечена или произошла ошибка SDMMC.
-       * Закрываем файловую систему и пробуем снова через секунду.
+       * Ошибка карты: текущая структура остаётся в RAM и будет повторена.
        */
-      (void)f_close(&SDFile);
       (void)f_mount(NULL, SDPath, 1U);
       osDelay(1000U);
       break;
