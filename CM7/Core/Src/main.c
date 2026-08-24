@@ -75,7 +75,7 @@ UART_HandleTypeDef huart1;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
@@ -85,13 +85,13 @@ static osThreadId_t taskDisplayHandle;
 static osThreadId_t taskSDcardHandle;
 static const osThreadAttr_t taskDisplay_attributes = {
   .name = "taskDisplay",
-  .stack_size = 256 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t)osPriorityNormal,
 };
 
 static const osThreadAttr_t taskSDcard_attributes = {
   .name = "taskSDcard",
-  .stack_size = 128 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t)osPriorityNormal,
 };
 
@@ -242,7 +242,7 @@ HAL_EnableCompensationCell();
 
   /* USER CODE BEGIN RTOS_QUEUES */
   displayQueueHandle = osMessageQueueNew(1U, sizeof(LogGenerationNumbers), NULL);
-  sdCardQueueHandle = osMessageQueueNew(1U, sizeof(LogGenerationNumbers), NULL);
+  sdCardQueueHandle = osMessageQueueNew(2U, sizeof(LogGenerationNumbers), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -749,14 +749,118 @@ static void taskDisplay(void *argument)
 static void taskSDcard(void *argument)
 {
   LogGenerationNumbers log;
+  char line[64];
+  char filePath[20];
+  int length = 0;
+  UINT bytesWritten;
+  FRESULT result;
+  uint8_t pendingLog = 0U;
 
   (void)argument;
 
+  /*
+   * После MX_FATFS_Init() SDPath обычно содержит "0:".
+   * Итоговый путь будет "0:/file01.txt".
+   */
+  (void)snprintf(filePath, sizeof(filePath),
+                 "%s/file01.txt", SDPath);
+
   for (;;)
   {
-    (void)osMessageQueueGet(sdCardQueueHandle, &log, NULL, osWaitForever);
+    /*
+     * Монтирование выполняется из RTOS-задачи, то есть уже после запуска
+     * планировщика. Это необходимо для текущего RTOS-драйвера SD.
+     */
+    result = f_mount(&SDFatFS, SDPath, 1U);
+    if (result != FR_OK)
+    {
+      osDelay(1000U);
+      continue;
+    }
 
-    /* Позже: записать log.time и log.numbers[] в file01.txt */
+    /*
+     * Если файл существует — перейти в его конец.
+     * Если файла нет — создать его.
+     */
+    result = f_open(&SDFile,
+                    filePath,
+                    FA_WRITE | FA_OPEN_APPEND);
+
+    if (result != FR_OK)
+    {
+      (void)f_mount(NULL, SDPath, 1U);
+      osDelay(1000U);
+      continue;
+    }
+
+    for (;;)
+    {
+      /*
+       * При ошибке записи pendingLog остаётся равным 1:
+       * задача не извлекает следующую структуру, пока не повторит
+       * попытку сохранения текущей.
+       */
+      if (pendingLog == 0U)
+      {
+        if (osMessageQueueGet(sdCardQueueHandle,
+                              &log,
+                              NULL,
+                              osWaitForever) != osOK)
+        {
+          continue;
+        }
+
+        length = snprintf(line,
+                          sizeof(line),
+                          "%s %d, %d, %d, %d, %d\r\n",
+                          log.time,
+                          log.numbers[0],
+                          log.numbers[1],
+                          log.numbers[2],
+                          log.numbers[3],
+                          log.numbers[4]);
+
+        if ((length <= 0) ||
+            ((size_t)length >= sizeof(line)))
+        {
+          continue;
+        }
+
+        pendingLog = 1U;
+      }
+
+      bytesWritten = 0U;
+
+      result = f_write(&SDFile,
+                       line,
+                       (UINT)length,
+                       &bytesWritten);
+
+      if ((result == FR_OK) &&
+          (bytesWritten == (UINT)length))
+      {
+        /*
+         * Физически сбросить строку на карту после каждой записи.
+         */
+        result = f_sync(&SDFile);
+      }
+
+      if ((result == FR_OK) &&
+          (bytesWritten == (UINT)length))
+      {
+        pendingLog = 0U;
+        continue;
+      }
+
+      /*
+       * Карта могла быть извлечена или произошла ошибка SDMMC.
+       * Закрываем файловую систему и пробуем снова через секунду.
+       */
+      (void)f_close(&SDFile);
+      (void)f_mount(NULL, SDPath, 1U);
+      osDelay(1000U);
+      break;
+    }
   }
 }
 /* USER CODE END 4 */
