@@ -751,91 +751,58 @@ static void taskSDcard(void *argument)
   LogGenerationNumbers log;
   char line[64];
   char filePath[20];
-  int length = 0;
   UINT bytesWritten;
   FRESULT result;
-  uint8_t pendingLog = 0U;
+  int length;
 
   (void)argument;
 
   (void)snprintf(filePath, sizeof(filePath),
                  "%s/file01.txt", SDPath);
 
+  if (f_mount(&SDFatFS, SDPath, 1U) != FR_OK)
+  {
+    Error_Handler();
+  }
+
   for (;;)
   {
-    result = f_mount(&SDFatFS, SDPath, 1U);
-    if (result != FR_OK)
+    if (osMessageQueueGet(sdCardQueueHandle,
+                          &log,
+                          NULL,
+                          osWaitForever) != osOK)
     {
-      osDelay(1000U);
       continue;
     }
 
-    for (;;)
+    length = snprintf(line, sizeof(line),
+                      "%s %d, %d, %d, %d, %d\r\n",
+                      log.time,
+                      log.numbers[0],
+                      log.numbers[1],
+                      log.numbers[2],
+                      log.numbers[3],
+                      log.numbers[4]);
+
+    if ((length <= 0) || ((size_t)length >= sizeof(line)))
     {
-      if (pendingLog == 0U)
+      continue;
+    }
+
+    result = f_open(&SDFile, filePath, FA_WRITE | FA_OPEN_APPEND);
+
+    if (result == FR_OK)
+    {
+      result = f_write(&SDFile, line, (UINT)length, &bytesWritten);
+
+      if ((result == FR_OK) && (bytesWritten == (UINT)length))
       {
-        if (osMessageQueueGet(sdCardQueueHandle,
-                              &log,
-                              NULL,
-                              osWaitForever) != osOK)
-        {
-          continue;
-        }
-
-        length = snprintf(line,
-                          sizeof(line),
-                          "%s %d, %d, %d, %d, %d\r\n",
-                          log.time,
-                          log.numbers[0],
-                          log.numbers[1],
-                          log.numbers[2],
-                          log.numbers[3],
-                          log.numbers[4]);
-
-        if ((length <= 0) || ((size_t)length >= sizeof(line)))
-        {
-          continue;
-        }
-
-        pendingLog = 1U;
+        result = f_close(&SDFile);
       }
-
-      result = f_open(&SDFile, filePath, FA_WRITE | FA_OPEN_APPEND);
-      if (result == FR_OK)
+      else
       {
-        bytesWritten = 0U;
-
-        result = f_write(&SDFile,
-                         line,
-                         (UINT)length,
-                         &bytesWritten);
-
-        if ((result == FR_OK) &&
-            (bytesWritten == (UINT)length))
-        {
-          /*
-           * f_close выполняет f_sync: записывает данные и FAT на карту.
-           */
-          result = f_close(&SDFile);
-
-          if (result == FR_OK)
-          {
-            pendingLog = 0U;
-            continue;
-          }
-        }
-        else
-        {
-          (void)f_close(&SDFile);
-        }
+        (void)f_close(&SDFile);
       }
-
-      /*
-       * Ошибка карты: текущая структура остаётся в RAM и будет повторена.
-       */
-      (void)f_mount(NULL, SDPath, 1U);
-      osDelay(1000U);
-      break;
     }
   }
 }
