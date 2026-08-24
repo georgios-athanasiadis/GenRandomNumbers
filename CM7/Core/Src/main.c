@@ -20,15 +20,22 @@
 #include "main.h"
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
+#include "fatfs.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include "stm32h747i_discovery_lcd.h"
+#include "stm32_lcd.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct
+{
+  char time[12];
+  int numbers[5];
+} LogGenerationNumbers;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -55,7 +62,11 @@
 
 /* Private variables ---------------------------------------------------------*/
 
+DMA2D_HandleTypeDef hdma2d;
+
 RNG_HandleTypeDef hrng;
+
+SD_HandleTypeDef hsd1;
 
 UART_HandleTypeDef huart8;
 UART_HandleTypeDef huart1;
@@ -68,7 +79,29 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
+
 static osTimerId_t myTimerHandle;
+static osThreadId_t taskDisplayHandle;
+static osThreadId_t taskSDcardHandle;
+static const osThreadAttr_t taskDisplay_attributes = {
+  .name = "taskDisplay",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t)osPriorityNormal,
+};
+
+static const osThreadAttr_t taskSDcard_attributes = {
+  .name = "taskSDcard",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t)osPriorityNormal,
+};
+
+static osMessageQueueId_t displayQueueHandle;
+static osMessageQueueId_t sdCardQueueHandle;
+
+static int counter = 0;
+static LogGenerationNumbers currentLog;
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -79,10 +112,15 @@ static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_RNG_Init(void);
 static void MX_UART8_Init(void);
+static void MX_DMA2D_Init(void);
+static void MX_SDMMC1_SD_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 static void MyTimerCallback(void *argument);
+static void taskDisplay(void *argument);
+static void taskSDcard(void *argument);
+static char *CounterToTimeString(int counter);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -155,6 +193,9 @@ Error_Handler();
 /* USER CODE END Boot_Mode_Sequence_2 */
 
   /* USER CODE BEGIN SysInit */
+__HAL_RCC_CSI_ENABLE();
+__HAL_RCC_SYSCFG_CLK_ENABLE();
+HAL_EnableCompensationCell();
 
   /* USER CODE END SysInit */
 
@@ -163,8 +204,25 @@ Error_Handler();
   MX_USART1_UART_Init();
   MX_RNG_Init();
   MX_UART8_Init();
+  MX_SDMMC1_SD_Init();
+  MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
+  if (BSP_LCD_Init(0U, LCD_ORIENTATION_LANDSCAPE) != BSP_ERROR_NONE)
+  {
+    Error_Handler();
+  }
 
+  UTIL_LCD_SetFuncDriver(&LCD_Driver);
+  UTIL_LCD_SetLayer(0U);
+  UTIL_LCD_SetFont(&Font24);
+  UTIL_LCD_SetBackColor(UTIL_LCD_COLOR_WHITE);
+  UTIL_LCD_SetTextColor(UTIL_LCD_COLOR_BLACK);
+  UTIL_LCD_Clear(UTIL_LCD_COLOR_WHITE);
+
+  if (BSP_LCD_DisplayOn(0U) != BSP_ERROR_NONE)
+  {
+    Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -183,7 +241,8 @@ Error_Handler();
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
+  displayQueueHandle = osMessageQueueNew(1U, sizeof(LogGenerationNumbers), NULL);
+  sdCardQueueHandle = osMessageQueueNew(1U, sizeof(LogGenerationNumbers), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -191,7 +250,8 @@ Error_Handler();
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  taskDisplayHandle = osThreadNew(taskDisplay, NULL, &taskDisplay_attributes);
+  taskSDcardHandle = osThreadNew(taskSDcard, NULL, &taskSDcard_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -288,20 +348,61 @@ void PeriphCommonClock_Config(void)
 
   /** Initializes the peripherals clock
   */
-  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_ADC;
-  PeriphClkInitStruct.PLL2.PLL2M = 2;
-  PeriphClkInitStruct.PLL2.PLL2N = 12;
-  PeriphClkInitStruct.PLL2.PLL2P = 2;
-  PeriphClkInitStruct.PLL2.PLL2Q = 2;
-  PeriphClkInitStruct.PLL2.PLL2R = 2;
-  PeriphClkInitStruct.PLL2.PLL2RGE = RCC_PLL2VCIRANGE_3;
-  PeriphClkInitStruct.PLL2.PLL2VCOSEL = RCC_PLL2VCOMEDIUM;
+  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_FMC|RCC_PERIPHCLK_ADC;
+  PeriphClkInitStruct.PLL2.PLL2M = 5;
+  PeriphClkInitStruct.PLL2.PLL2N = 120;
+  PeriphClkInitStruct.PLL2.PLL2P = 8;
+  PeriphClkInitStruct.PLL2.PLL2Q = 3;
+  PeriphClkInitStruct.PLL2.PLL2R = 3;
+  PeriphClkInitStruct.PLL2.PLL2RGE = RCC_PLL2VCIRANGE_2;
+  PeriphClkInitStruct.PLL2.PLL2VCOSEL = RCC_PLL2VCOWIDE;
   PeriphClkInitStruct.PLL2.PLL2FRACN = 0;
+  PeriphClkInitStruct.FmcClockSelection = RCC_FMCCLKSOURCE_PLL2;
   PeriphClkInitStruct.AdcClockSelection = RCC_ADCCLKSOURCE_PLL2;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief DMA2D Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_DMA2D_Init(void)
+{
+
+  /* USER CODE BEGIN DMA2D_Init 0 */
+
+  /* USER CODE END DMA2D_Init 0 */
+
+  /* USER CODE BEGIN DMA2D_Init 1 */
+
+  /* USER CODE END DMA2D_Init 1 */
+  hdma2d.Instance = DMA2D;
+  hdma2d.Init.Mode = DMA2D_M2M;
+  hdma2d.Init.ColorMode = DMA2D_OUTPUT_ARGB8888;
+  hdma2d.Init.OutputOffset = 0;
+  hdma2d.LayerCfg[1].InputOffset = 0;
+  hdma2d.LayerCfg[1].InputColorMode = DMA2D_INPUT_ARGB8888;
+  hdma2d.LayerCfg[1].AlphaMode = DMA2D_NO_MODIF_ALPHA;
+  hdma2d.LayerCfg[1].InputAlpha = 0;
+  hdma2d.LayerCfg[1].AlphaInverted = DMA2D_REGULAR_ALPHA;
+  hdma2d.LayerCfg[1].RedBlueSwap = DMA2D_RB_REGULAR;
+  hdma2d.LayerCfg[1].ChromaSubSampling = DMA2D_NO_CSS;
+  if (HAL_DMA2D_Init(&hdma2d) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_DMA2D_ConfigLayer(&hdma2d, 1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN DMA2D_Init 2 */
+
+  /* USER CODE END DMA2D_Init 2 */
+
 }
 
 /**
@@ -328,6 +429,37 @@ static void MX_RNG_Init(void)
   /* USER CODE BEGIN RNG_Init 2 */
 
   /* USER CODE END RNG_Init 2 */
+
+}
+
+/**
+  * @brief SDMMC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SDMMC1_SD_Init(void)
+{
+
+  /* USER CODE BEGIN SDMMC1_Init 0 */
+
+  /* USER CODE END SDMMC1_Init 0 */
+
+  /* USER CODE BEGIN SDMMC1_Init 1 */
+
+  /* USER CODE END SDMMC1_Init 1 */
+  hsd1.Instance = SDMMC1;
+  hsd1.Init.ClockEdge = SDMMC_CLOCK_EDGE_RISING;
+  hsd1.Init.ClockPowerSave = SDMMC_CLOCK_POWER_SAVE_DISABLE;
+  hsd1.Init.BusWide = SDMMC_BUS_WIDE_4B;
+  hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_DISABLE;
+  hsd1.Init.ClockDiv = 0;
+  if (HAL_SD_Init(&hsd1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SDMMC1_Init 2 */
+
+  /* USER CODE END SDMMC1_Init 2 */
 
 }
 
@@ -440,13 +572,16 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOK_CLK_ENABLE();
-  __HAL_RCC_GPIOJ_CLK_ENABLE();
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOI_CLK_ENABLE();
-  __HAL_RCC_GPIOG_CLK_ENABLE();
+  __HAL_RCC_GPIOK_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
+  __HAL_RCC_GPIOJ_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOG_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
@@ -480,6 +615,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(BL_CTRL_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : uSD_Detect_Pin */
+  GPIO_InitStruct.Pin = uSD_Detect_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(uSD_Detect_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : CEC_CK_MCO1_Pin */
   GPIO_InitStruct.Pin = CEC_CK_MCO1_Pin;
@@ -515,28 +656,108 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+static char *CounterToTimeString(int counter)
+{
+  static char timeString[12];
+  unsigned int totalSeconds = (unsigned int)counter * 5U;
+  unsigned int minutes = totalSeconds / 60U;
+  unsigned int seconds = totalSeconds % 60U;
+
+  (void)snprintf(timeString, sizeof(timeString),
+                 "%02u:%02u", minutes, seconds);
+
+  return timeString;
+}
+
 static void MyTimerCallback(void *argument)
 {
-    uint32_t raw;
-    uint16_t number;
-    char message[8];
-    int length;
+  uint32_t raw;
+  int i;
+  char message[64];
+  int length;
 
-    (void)argument;
+  (void)argument;
 
-    if (HAL_RNG_GenerateRandomNumber(&hrng, &raw) == HAL_OK)
+  for (i = 0; i < 5; i++)
+  {
+    if (HAL_RNG_GenerateRandomNumber(&hrng, &raw) != HAL_OK)
     {
-        number = 256U + (uint16_t)(raw & 0xFFU);
-
-        length = snprintf(message, sizeof(message), "%u\r\n",
-                          (unsigned int)number);
-
-        if ((length > 0) && ((size_t)length < sizeof(message)))
-        {
-            (void)HAL_UART_Transmit(&huart1, (uint8_t *)message,
-                                    (uint16_t)length, 100U);
-        }
+      return;
     }
+
+    currentLog.numbers[i] = 256 + (int)(raw & 0xFFU);
+  }
+
+  (void)snprintf(currentLog.time, sizeof(currentLog.time),
+                 "%s", CounterToTimeString(counter));
+
+  length = snprintf(message, sizeof(message),
+                    "%s %d, %d, %d, %d, %d\r\n",
+                    currentLog.time,
+                    currentLog.numbers[0],
+                    currentLog.numbers[1],
+                    currentLog.numbers[2],
+                    currentLog.numbers[3],
+                    currentLog.numbers[4]);
+
+  (void)HAL_UART_Transmit(&huart1, (uint8_t *)message,
+                          (uint16_t)length, 100U);
+  (void)HAL_UART_Transmit(&huart8, (uint8_t *)message,
+                          (uint16_t)length, 100U);
+
+  (void)osMessageQueuePut(displayQueueHandle, &currentLog, 0U, 0U);
+  (void)osMessageQueuePut(sdCardQueueHandle, &currentLog, 0U, 0U);
+
+  counter++;
+}
+
+
+static void taskDisplay(void *argument)
+{
+  LogGenerationNumbers log;
+  char line[64];
+
+  (void)argument;
+
+  for (;;)
+  {
+    if (osMessageQueueGet(displayQueueHandle,
+                          &log,
+                          NULL,
+                          osWaitForever) == osOK)
+    {
+      (void)snprintf(line, sizeof(line),
+                     "%s %d, %d, %d, %d, %d",
+                     log.time,
+                     log.numbers[0],
+                     log.numbers[1],
+                     log.numbers[2],
+                     log.numbers[3],
+                     log.numbers[4]);
+
+      UTIL_LCD_ClearStringLine(10U);
+
+      UTIL_LCD_DisplayStringAt(0U,
+                              LINE(10U),
+                              (uint8_t *)line,
+                              CENTER_MODE);
+    }
+  }
+}
+
+
+static void taskSDcard(void *argument)
+{
+  LogGenerationNumbers log;
+
+  (void)argument;
+
+  for (;;)
+  {
+    (void)osMessageQueueGet(sdCardQueueHandle, &log, NULL, osWaitForever);
+
+    /* Позже: записать log.time и log.numbers[] в file01.txt */
+  }
 }
 /* USER CODE END 4 */
 
@@ -550,6 +771,7 @@ static void MyTimerCallback(void *argument)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
+	MyTimerCallback(NULL);
   osTimerStart(myTimerHandle, 5000U);
   /* Infinite loop */
   for(;;)
@@ -581,6 +803,19 @@ void MPU_Config(void)
   MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
   MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
   MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /** Initializes and configures the Region and the memory to be protected
+  */
+  MPU_InitStruct.Number = MPU_REGION_NUMBER1;
+  MPU_InitStruct.BaseAddress = 0xD0000000;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_32MB;
+  MPU_InitStruct.SubRegionDisable = 0x0;
+  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_CACHEABLE;
 
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
   /* Enables the MPU */
