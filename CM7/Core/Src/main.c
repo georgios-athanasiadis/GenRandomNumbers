@@ -25,12 +25,22 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <string.h>
 #include "stm32h747i_discovery_lcd.h"
 #include "stm32_lcd.h"
+#include "dfrobot_gnss.h"
+#include "bmp180.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct
+{
+   char message[128U];
+   uint8_t indexLine;
+
+} PrintLineOnDisplay;
+
 typedef struct
 {
   char time[12];
@@ -40,6 +50,7 @@ typedef struct
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define GNSS_DISPLAY_MESSAGE_SIZE  128U
 
 /* DUAL_CORE_BOOT_SYNC_SEQUENCE: Define for dual core boot synchronization    */
 /*                             demonstration code based on hardware semaphore */
@@ -64,10 +75,13 @@ typedef struct
 
 DMA2D_HandleTypeDef hdma2d;
 
+I2C_HandleTypeDef hi2c4;
+
 RNG_HandleTypeDef hrng;
 
 SD_HandleTypeDef hsd1;
 
+UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart8;
 UART_HandleTypeDef huart1;
 
@@ -75,7 +89,7 @@ UART_HandleTypeDef huart1;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 512 * 4,
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
@@ -83,6 +97,8 @@ const osThreadAttr_t defaultTask_attributes = {
 static osTimerId_t myTimerHandle;
 static osThreadId_t taskDisplayHandle;
 static osThreadId_t taskSDcardHandle;
+static osThreadId_t taskGNSSHandle;
+static osThreadId_t taskBMPHandle;
 static const osThreadAttr_t taskDisplay_attributes = {
   .name = "taskDisplay",
   .stack_size = 512 * 4,
@@ -94,12 +110,28 @@ static const osThreadAttr_t taskSDcard_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t)osPriorityNormal,
 };
+static const osThreadAttr_t taskGNSS_attributes = {
+  .name = "taskGNSS",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t)osPriorityNormal,
+};
+static const osThreadAttr_t taskBMP_attributes = {
+  .name = "taskBMP",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t)osPriorityNormal,
+};
 
 static osMessageQueueId_t displayQueueHandle;
+static osMessageQueueId_t displayGnssQueueHandle;
 static osMessageQueueId_t sdCardQueueHandle;
 
 static int counter = 0;
 static LogGenerationNumbers currentLog;
+static bmp180_t bmp180 = {
+  .oversampling_setting = standart
+};
+static uint8_t bmp180Ready = 0U;
+
 
 
 /* USER CODE END PV */
@@ -114,12 +146,16 @@ static void MX_RNG_Init(void);
 static void MX_UART8_Init(void);
 static void MX_DMA2D_Init(void);
 static void MX_SDMMC1_SD_Init(void);
+static void MX_UART4_Init(void);
+static void MX_I2C4_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 static void MyTimerCallback(void *argument);
 static void taskDisplay(void *argument);
 static void taskSDcard(void *argument);
+static void taskGNSS(void *argument);
+static void taskBMP(void *argument);
 static char *CounterToTimeString(int counter);
 /* USER CODE END PFP */
 
@@ -206,7 +242,52 @@ HAL_EnableCompensationCell();
   MX_UART8_Init();
   MX_SDMMC1_SD_Init();
   MX_FATFS_Init();
+  MX_UART4_Init();
+  MX_I2C4_Init();
   /* USER CODE BEGIN 2 */
+
+  /* BMP180 Initialization*/
+  bmp180Ready = (bmp180_init(&hi2c4, &bmp180) == 0U);
+
+  if (!bmp180Ready)
+  {
+    static const uint8_t message[] = "BMP180: init failed\r\n";
+
+    (void)HAL_UART_Transmit(
+        &huart1,
+        (uint8_t *)message,
+        (uint16_t)(sizeof(message) - 1U),
+        100U);
+  }
+
+
+  /* GNSS Initialization */
+  static const uint8_t gnssConnected[] =
+      "DFRobot GNSS: connected\r\n";
+
+  static const uint8_t gnssNotFound[] =
+      "DFRobot GNSS: not found\r\n";
+
+  if (GNSS_Begin(&huart8) == HAL_OK)
+  {
+    (void)GNSS_EnablePower();
+
+    (void)HAL_UART_Transmit(
+        &huart1,
+        gnssConnected,
+        (uint16_t)(sizeof(gnssConnected) - 1U),
+        100U);
+  }
+  else
+  {
+    (void)HAL_UART_Transmit(
+        &huart1,
+        gnssNotFound,
+        (uint16_t)(sizeof(gnssNotFound) - 1U),
+        100U);
+  }
+
+  /* LCD Initialization */
   if (BSP_LCD_Init(0U, LCD_ORIENTATION_LANDSCAPE) != BSP_ERROR_NONE)
   {
     Error_Handler();
@@ -241,8 +322,10 @@ HAL_EnableCompensationCell();
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  displayQueueHandle = osMessageQueueNew(1U, sizeof(LogGenerationNumbers), NULL);
-  sdCardQueueHandle = osMessageQueueNew(2U, sizeof(LogGenerationNumbers), NULL);
+  displayQueueHandle = osMessageQueueNew(4U, sizeof(PrintLineOnDisplay), NULL);
+  displayGnssQueueHandle = osMessageQueueNew(1U, GNSS_DISPLAY_MESSAGE_SIZE, NULL);
+  sdCardQueueHandle = osMessageQueueNew(4U, GNSS_DISPLAY_MESSAGE_SIZE, NULL);
+
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -252,6 +335,8 @@ HAL_EnableCompensationCell();
   /* USER CODE BEGIN RTOS_THREADS */
   taskDisplayHandle = osThreadNew(taskDisplay, NULL, &taskDisplay_attributes);
   taskSDcardHandle = osThreadNew(taskSDcard, NULL, &taskSDcard_attributes);
+  taskGNSSHandle = osThreadNew(taskGNSS, NULL, &taskGNSS_attributes);
+  taskBMPHandle = osThreadNew(taskBMP, NULL, &taskBMP_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -406,6 +491,54 @@ static void MX_DMA2D_Init(void)
 }
 
 /**
+  * @brief I2C4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C4_Init(void)
+{
+
+  /* USER CODE BEGIN I2C4_Init 0 */
+
+  /* USER CODE END I2C4_Init 0 */
+
+  /* USER CODE BEGIN I2C4_Init 1 */
+
+  /* USER CODE END I2C4_Init 1 */
+  hi2c4.Instance = I2C4;
+  hi2c4.Init.Timing = 0x10707DBC;
+  hi2c4.Init.OwnAddress1 = 0;
+  hi2c4.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c4.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c4.Init.OwnAddress2 = 0;
+  hi2c4.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c4.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c4.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Analogue filter
+  */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c4, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Digital filter
+  */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c4, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C4_Init 2 */
+
+  /* USER CODE END I2C4_Init 2 */
+
+}
+
+/**
   * @brief RNG Initialization Function
   * @param None
   * @retval None
@@ -464,6 +597,54 @@ static void MX_SDMMC1_SD_Init(void)
 }
 
 /**
+  * @brief UART4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_UART4_Init(void)
+{
+
+  /* USER CODE BEGIN UART4_Init 0 */
+
+  /* USER CODE END UART4_Init 0 */
+
+  /* USER CODE BEGIN UART4_Init 1 */
+
+  /* USER CODE END UART4_Init 1 */
+  huart4.Instance = UART4;
+  huart4.Init.BaudRate = 9600;
+  huart4.Init.WordLength = UART_WORDLENGTH_8B;
+  huart4.Init.StopBits = UART_STOPBITS_1;
+  huart4.Init.Parity = UART_PARITY_NONE;
+  huart4.Init.Mode = UART_MODE_TX_RX;
+  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart4.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart4.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart4.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart4, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart4, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_DisableFifoMode(&huart4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN UART4_Init 2 */
+
+  /* USER CODE END UART4_Init 2 */
+
+}
+
+/**
   * @brief UART8 Initialization Function
   * @param None
   * @retval None
@@ -479,7 +660,7 @@ static void MX_UART8_Init(void)
 
   /* USER CODE END UART8_Init 1 */
   huart8.Instance = UART8;
-  huart8.Init.BaudRate = 115200;
+  huart8.Init.BaudRate = 9600;
   huart8.Init.WordLength = UART_WORDLENGTH_8B;
   huart8.Init.StopBits = UART_STOPBITS_1;
   huart8.Init.Parity = UART_PARITY_NONE;
@@ -578,11 +759,11 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOJ_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOF_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(BL_CTRL_GPIO_Port, BL_CTRL_Pin, GPIO_PIN_RESET);
@@ -685,7 +866,7 @@ static void MyTimerCallback(void *argument)
       return;
     }
 
-    currentLog.numbers[i] = 256 + (int)(raw & 0xFFU);
+    currentLog.numbers[i] = /*256 +*/ (int)(raw & 0xFFU);
   }
 
   (void)snprintf(currentLog.time, sizeof(currentLog.time),
@@ -700,56 +881,46 @@ static void MyTimerCallback(void *argument)
                     currentLog.numbers[3],
                     currentLog.numbers[4]);
 
-  (void)HAL_UART_Transmit(&huart1, (uint8_t *)message,
+  /*(void)HAL_UART_Transmit(&huart1, (uint8_t *)message,
                           (uint16_t)length, 100U);
   (void)HAL_UART_Transmit(&huart8, (uint8_t *)message,
-                          (uint16_t)length, 100U);
+                          (uint16_t)length, 100U);*/
 
-  (void)osMessageQueuePut(displayQueueHandle, &currentLog, 0U, 0U);
-  (void)osMessageQueuePut(sdCardQueueHandle, &currentLog, 0U, 0U);
+  /*(void)osMessageQueuePut(displayQueueHandle, &currentLog, 0U, 0U);*/
+  /*(void)osMessageQueuePut(sdCardQueueHandle, &currentLog, 0U, 0U);*/
 
   counter++;
+
+  (void)osThreadFlagsSet(taskGNSSHandle, 1U);
+  (void)osThreadFlagsSet(taskBMPHandle, 1U);
 }
 
 
 static void taskDisplay(void *argument)
 {
-  LogGenerationNumbers log;
-  char line[64];
 
-  (void)argument;
+	  PrintLineOnDisplay line;
 
-  for (;;)
-  {
-    if (osMessageQueueGet(displayQueueHandle,
-                          &log,
-                          NULL,
-                          osWaitForever) == osOK)
-    {
-      (void)snprintf(line, sizeof(line),
-                     "%s %d, %d, %d, %d, %d",
-                     log.time,
-                     log.numbers[0],
-                     log.numbers[1],
-                     log.numbers[2],
-                     log.numbers[3],
-                     log.numbers[4]);
+	  (void)argument;
 
-      UTIL_LCD_ClearStringLine(10U);
+	  for (;;)
+	  {
+	    if (osMessageQueueGet(displayQueueHandle, &line, NULL,
+	                          osWaitForever) == osOK)
+	    {
+	      UTIL_LCD_ClearStringLine(line.indexLine);
+	      UTIL_LCD_DisplayStringAt(0U, LINE(line.indexLine),
+	                               (uint8_t *)line.message, CENTER_MODE);
+	    }
+	  }
 
-      UTIL_LCD_DisplayStringAt(0U,
-                              LINE(10U),
-                              (uint8_t *)line,
-                              CENTER_MODE);
-    }
-  }
 }
 
 
 static void taskSDcard(void *argument)
 {
   LogGenerationNumbers log;
-  char line[64];
+  char line[GNSS_DISPLAY_MESSAGE_SIZE];
   char filePath[20];
   UINT bytesWritten;
   FRESULT result;
@@ -768,26 +939,20 @@ static void taskSDcard(void *argument)
   for (;;)
   {
     if (osMessageQueueGet(sdCardQueueHandle,
-                          &log,
+                          line,
                           NULL,
                           osWaitForever) != osOK)
     {
       continue;
     }
 
-    length = snprintf(line, sizeof(line),
-                      "%s %d, %d, %d, %d, %d\r\n",
-                      log.time,
-                      log.numbers[0],
-                      log.numbers[1],
-                      log.numbers[2],
-                      log.numbers[3],
-                      log.numbers[4]);
+    length = (int)strlen(line);
 
-    if ((length <= 0) || ((size_t)length >= sizeof(line)))
+    if (length == 0)
     {
       continue;
     }
+
 
     result = f_open(&SDFile, filePath, FA_WRITE | FA_OPEN_APPEND);
 
@@ -803,6 +968,170 @@ static void taskSDcard(void *argument)
       {
         (void)f_close(&SDFile);
       }
+    }
+  }
+}
+
+
+static void taskGNSS(void *argument)
+{
+  static const uint8_t noSatellite[] =
+      "Not connection with satelite\r\n";
+
+  sTim_t timeDate = {0};
+  sLonLat_t position = {0};
+  char message[GNSS_DISPLAY_MESSAGE_SIZE];
+  PrintLineOnDisplay displayLine = { .indexLine = 10U };
+  int length;
+  HAL_StatusTypeDef utcStatus;
+  HAL_StatusTypeDef dateStatus;
+  HAL_StatusTypeDef latStatus;
+  HAL_StatusTypeDef lonStatus;
+  /*
+    0 — HAL_OK;
+    1 — HAL_ERROR;
+    2 — HAL_BUSY;
+    3 — HAL_TIMEOUT
+   *
+   */
+
+  (void)argument;
+
+  for (;;)
+  {
+    (void)osThreadFlagsWait(
+        1U,
+        osFlagsWaitAny,
+        osWaitForever);
+
+    utcStatus = GNSS_GetUTC(&timeDate);
+    dateStatus = GNSS_GetDate(&timeDate);
+    latStatus = GNSS_GetLat(&position);
+    lonStatus = GNSS_GetLon(&position);
+
+    if ((utcStatus != HAL_OK) ||
+        (dateStatus != HAL_OK) ||
+        (latStatus != HAL_OK) ||
+        (lonStatus != HAL_OK) ||
+        ((position.latDirection != 'N') &&
+         (position.latDirection != 'S')) ||
+        ((position.lonDirection != 'E') &&
+         (position.lonDirection != 'W')))
+    {
+      length = snprintf(
+          message,
+          sizeof(message),
+          "GNSS debug: UTC=%u DATE=%u LAT=%u LON=%u DIR=%u/%u\r\n",
+          (unsigned int)utcStatus,
+          (unsigned int)dateStatus,
+          (unsigned int)latStatus,
+          (unsigned int)lonStatus,
+          (unsigned int)(uint8_t)position.latDirection,
+          (unsigned int)(uint8_t)position.lonDirection);
+
+      (void)HAL_UART_Transmit(
+          &huart1,
+          (uint8_t *)message,
+          (uint16_t)length,
+          100U);
+
+      message[length - 2] = '\0';
+
+      (void)snprintf(displayLine.message, sizeof(displayLine.message),
+                     "%s", message);
+      (void)osMessageQueuePut(displayQueueHandle, &displayLine, 0U, 0U);
+
+      continue;
+    }
+
+    length = snprintf(
+        message,
+        sizeof(message),
+        "%04u-%02u-%02u %02u:%02u:%02u "
+        "LAT: %u %02u.%05lu %c "
+        "LON: %u %02u.%05lu %c\r\n",
+        (unsigned int)timeDate.year,
+        (unsigned int)timeDate.month,
+        (unsigned int)timeDate.date,
+        (unsigned int)timeDate.hour,
+        (unsigned int)timeDate.minute,
+        (unsigned int)timeDate.second,
+        (unsigned int)position.latDD,
+        (unsigned int)position.latMM,
+        (unsigned long)position.latMMMMM,
+        position.latDirection,
+        (unsigned int)position.lonDDD,
+        (unsigned int)position.lonMM,
+        (unsigned long)position.lonMMMMM,
+        position.lonDirection);
+
+    (void)HAL_UART_Transmit(
+        &huart1,
+        (uint8_t *)message,
+        (uint16_t)length,
+        100U);
+
+    (void)osMessageQueuePut(sdCardQueueHandle, message, 0U, 0U);
+
+    message[length - 2] = '\0';
+
+    (void)snprintf(displayLine.message, sizeof(displayLine.message),
+                   "%s", message);
+    (void)osMessageQueuePut(displayQueueHandle, &displayLine, 0U, 0U);
+  }
+}
+
+
+
+static void taskBMP(void *argument)
+{
+  char message[GNSS_DISPLAY_MESSAGE_SIZE];
+  PrintLineOnDisplay displayLine = { .indexLine = 11U };
+  int length;
+
+  (void)argument;
+
+  for (;;)
+  {
+    (void)osThreadFlagsWait(
+        1U,
+        osFlagsWaitAny,
+        osWaitForever);
+
+    if (!bmp180Ready)
+    {
+      continue;
+    }
+
+    bmp180_get_all(&bmp180);
+
+    length = snprintf(
+        message,
+        sizeof(message),
+        "BMP180: T=%.2f C, P=%ld Pa, Alt=%.2f m\r\n",
+        (double)bmp180.temperature,
+        (long)bmp180.pressure,
+        (double)bmp180.altitude);
+
+    if (length > 0 && length < (int)sizeof(message))
+    {
+      (void)HAL_UART_Transmit(
+          &huart1,
+          (uint8_t *)message,
+          (uint16_t)length,
+          100U);
+
+      (void)snprintf(displayLine.message, sizeof(displayLine.message),
+                     "%s", message);
+      displayLine.message[length - 2] = '\0';
+
+      (void)osMessageQueuePut(displayQueueHandle, &displayLine, 0U, 0U);
+
+      (void)osMessageQueuePut(
+    		  sdCardQueueHandle,
+              message,
+              0U,
+              0U);
     }
   }
 }

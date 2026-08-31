@@ -37,12 +37,17 @@
 		<link>
 			<name>Utilities</name>
 			<type>2</type>
-			<location>PARENT-1-PROJECT_LOC/Utilities</location>
+			<locationURI>PARENT-1-PROJECT_LOC/Utilities</locationURI>
 		</link>
 		<link>
 			<name>Drivers/BSP</name>
 			<type>2</type>
-			<location>PARENT-1-PROJECT_LOC/Drivers/BSP</location>
+			<locationURI>PARENT-1-PROJECT_LOC/Drivers/BSP</locationURI>
+		</link>
+		<link>
+			<name>Drivers/bmp180</name>
+			<type>2</type>
+			<location>/Users/georgiosathanasiadis/STM32CubeIDE/workspace_2.2.0/GenRandomNumbers/Drivers/bmp180</location>
 		</link>
 		<link>
 			<name>Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal.c</name>
