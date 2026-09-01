@@ -245,7 +245,7 @@ HAL_EnableCompensationCell();
   MX_UART4_Init();
   MX_I2C4_Init();
   /* USER CODE BEGIN 2 */
-  /*Test sxolio*/
+  /*Test sxolio Dionysios*/
   /* BMP180 Initialization*/
   bmp180Ready = (bmp180_init(&hi2c4, &bmp180) == 0U);
 
