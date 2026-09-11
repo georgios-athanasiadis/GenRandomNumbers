@@ -22,6 +22,7 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "cmsis_os2.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,6 +60,9 @@ extern SD_HandleTypeDef hsd1;
 extern TIM_HandleTypeDef htim6;
 
 /* USER CODE BEGIN EV */
+
+extern osMessageQueueId_t sdCardQueueHandle;
+extern const char sdCardChangedEvent[];
 
 /* USER CODE END EV */
 
@@ -189,5 +193,21 @@ void TIM6_DAC_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+
+void EXTI9_5_IRQHandler(void)
+{
+  if (__HAL_GPIO_EXTI_GET_IT(uSD_Detect_Pin) != 0U)
+  {
+    __HAL_GPIO_EXTI_CLEAR_IT(uSD_Detect_Pin);
+
+    if (sdCardQueueHandle != NULL)
+    {
+      (void)osMessageQueuePut(sdCardQueueHandle,
+                              sdCardChangedEvent,
+                              0U,
+                              0U);
+    }
+  }
+}
 
 /* USER CODE END 1 */

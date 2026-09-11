@@ -15,7 +15,7 @@
   *
   ******************************************************************************
   */
-/* USER CODE END Header */
+/* USER CODE END Header pc104 */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "FreeRTOS.h"
@@ -123,7 +123,8 @@ static const osThreadAttr_t taskBMP_attributes = {
 
 static osMessageQueueId_t displayQueueHandle;
 static osMessageQueueId_t displayGnssQueueHandle;
-static osMessageQueueId_t sdCardQueueHandle;
+osMessageQueueId_t sdCardQueueHandle;
+const char sdCardChangedEvent[GNSS_DISPLAY_MESSAGE_SIZE] = {0};
 
 static int counter = 0;
 static LogGenerationNumbers currentLog;
@@ -131,7 +132,7 @@ static bmp180_t bmp180 = {
   .oversampling_setting = standart
 };
 static uint8_t bmp180Ready = 0U;
-
+static uint8_t gnssReady = 0U;
 
 
 /* USER CODE END PV */
@@ -246,13 +247,13 @@ HAL_EnableCompensationCell();
   MX_I2C4_Init();
   /* USER CODE BEGIN 2 */
   /*Test sxolio*/
+
   /* BMP180 Initialization*/
   bmp180Ready = (bmp180_init(&hi2c4, &bmp180) == 0U);
 
   if (!bmp180Ready)
   {
-    static const uint8_t message[] = "BMP180: init failed\r\n";
-
+    static const uint8_t message[] = "BMP180: Not Connected\r\n";
     (void)HAL_UART_Transmit(
         &huart1,
         (uint8_t *)message,
@@ -268,7 +269,8 @@ HAL_EnableCompensationCell();
   static const uint8_t gnssNotFound[] =
       "DFRobot GNSS: not found\r\n";
 
-  if (GNSS_Begin(&huart8) == HAL_OK)
+  gnssReady = (GNSS_Begin(&huart8) == HAL_OK);
+  if (gnssReady)
   {
     (void)GNSS_EnablePower();
 
@@ -285,6 +287,7 @@ HAL_EnableCompensationCell();
         gnssNotFound,
         (uint16_t)(sizeof(gnssNotFound) - 1U),
         100U);
+
   }
 
   /* LCD Initialization */
@@ -322,9 +325,13 @@ HAL_EnableCompensationCell();
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  displayQueueHandle = osMessageQueueNew(4U, sizeof(PrintLineOnDisplay), NULL);
+  displayQueueHandle = osMessageQueueNew(6U, sizeof(PrintLineOnDisplay), NULL);
   displayGnssQueueHandle = osMessageQueueNew(1U, GNSS_DISPLAY_MESSAGE_SIZE, NULL);
   sdCardQueueHandle = osMessageQueueNew(4U, GNSS_DISPLAY_MESSAGE_SIZE, NULL);
+  (void)osMessageQueuePut(sdCardQueueHandle,
+                          sdCardChangedEvent,
+                          0U,
+                          0U);
 
   /* USER CODE END RTOS_QUEUES */
 
@@ -579,6 +586,18 @@ static void MX_SDMMC1_SD_Init(void)
 
   /* USER CODE BEGIN SDMMC1_Init 1 */
 
+  hsd1.Instance = SDMMC1;
+  hsd1.Init.ClockEdge = SDMMC_CLOCK_EDGE_RISING;
+  hsd1.Init.ClockPowerSave = SDMMC_CLOCK_POWER_SAVE_DISABLE;
+  hsd1.Init.BusWide = SDMMC_BUS_WIDE_4B;
+  hsd1.Init.HardwareFlowControl = SDMMC_HARDWARE_FLOW_CONTROL_DISABLE;
+  hsd1.Init.ClockDiv = 0;
+
+  if (BSP_SD_IsDetected() == SD_NOT_PRESENT)
+  {
+	return;
+  }
+
   /* USER CODE END SDMMC1_Init 1 */
   hsd1.Instance = SDMMC1;
   hsd1.Init.ClockEdge = SDMMC_CLOCK_EDGE_RISING;
@@ -800,7 +819,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : uSD_Detect_Pin */
   GPIO_InitStruct.Pin = uSD_Detect_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(uSD_Detect_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : CEC_CK_MCO1_Pin */
@@ -832,6 +851,14 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+
+  GPIO_InitStruct.Pin = uSD_Detect_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(uSD_Detect_GPIO_Port, &GPIO_InitStruct);
+
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5U, 0U);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
@@ -919,22 +946,18 @@ static void taskDisplay(void *argument)
 
 static void taskSDcard(void *argument)
 {
-  LogGenerationNumbers log;
   char line[GNSS_DISPLAY_MESSAGE_SIZE];
   char filePath[20];
   UINT bytesWritten;
   FRESULT result;
   int length;
+  uint8_t sdCardMounted = 0U;
+  PrintLineOnDisplay statusLine = { .indexLine = 9U };
 
   (void)argument;
 
   (void)snprintf(filePath, sizeof(filePath),
                  "%s/file01.txt", SDPath);
-
-  if (f_mount(&SDFatFS, SDPath, 1U) != FR_OK)
-  {
-    Error_Handler();
-  }
 
   for (;;)
   {
@@ -946,13 +969,73 @@ static void taskSDcard(void *argument)
       continue;
     }
 
+
+    //Ektelite ean elave minima apo to interrupt/arxi
+    if (line[0] == '\0')
+    {
+      const char *statusMessage = NULL;
+
+      osDelay(20U);
+
+      //Ean sd detected
+      if (BSP_SD_IsDetected() == SD_PRESENT)
+      {
+        if (sdCardMounted == 0U)
+        {
+          result = f_mount(&SDFatFS, SDPath, 1U);
+
+          if (result == FR_OK)
+          {
+            sdCardMounted = 1U;
+            statusMessage = "SD card CONNECTED";
+          }
+          else
+          {
+            statusMessage = "SD card mount failed";
+          }
+        }
+      }
+      //Ean lipi i sd
+      else
+      {
+    	//Klinoume to Fats kai kanoume deinitialization tou SDMMC
+        (void)f_mount(NULL, SDPath, 0U);
+        (void)HAL_SD_DeInit(&hsd1);
+
+        (void)FATFS_UnLinkDriver(SDPath);
+        retSD = FATFS_LinkDriver(&SD_Driver, SDPath);
+
+        sdCardMounted = 0U;
+        statusMessage = "SD card not connected";
+      }
+
+      if (statusMessage != NULL)
+      {
+        (void)snprintf(statusLine.message, sizeof(statusLine.message),
+                       "%s", statusMessage);
+        (void)osMessageQueuePut(displayQueueHandle,
+                                &statusLine,
+                                0U,
+                                0U);
+      }
+
+      //Kani skip tin ektelesi tis rois kodika kai pai stin anamoni tou epomenou queue minimatos
+      continue;
+    }
+
+
+    //Ean lipi i sd card agnoite to queue minima kai xanete
+    if (sdCardMounted == 0U)
+    {
+      continue;
+    }
+
     length = (int)strlen(line);
 
     if (length == 0)
     {
       continue;
     }
-
 
     result = f_open(&SDFile, filePath, FA_WRITE | FA_OPEN_APPEND);
 
@@ -962,7 +1045,7 @@ static void taskSDcard(void *argument)
 
       if ((result == FR_OK) && (bytesWritten == (UINT)length))
       {
-        result = f_close(&SDFile);
+        (void)f_close(&SDFile);
       }
       else
       {
@@ -975,6 +1058,8 @@ static void taskSDcard(void *argument)
 
 static void taskGNSS(void *argument)
 {
+
+
   static const uint8_t noSatellite[] =
       "Not connection with satelite\r\n";
 
@@ -1003,6 +1088,14 @@ static void taskGNSS(void *argument)
         1U,
         osFlagsWaitAny,
         osWaitForever);
+
+    if (!gnssReady)
+    {
+      (void)snprintf(displayLine.message, sizeof(displayLine.message),
+                     "%s", "GNSS: Not Connected");
+      (void)osMessageQueuePut(displayQueueHandle, &displayLine, 0U, 0U);
+      continue;
+    }
 
     utcStatus = GNSS_GetUTC(&timeDate);
     dateStatus = GNSS_GetDate(&timeDate);
@@ -1100,6 +1193,9 @@ static void taskBMP(void *argument)
 
     if (!bmp180Ready)
     {
+      (void)snprintf(displayLine.message, sizeof(displayLine.message),
+                     "%s", "BMP180: Not Connected");
+      (void)osMessageQueuePut(displayQueueHandle, &displayLine, 0U, 0U);
       continue;
     }
 

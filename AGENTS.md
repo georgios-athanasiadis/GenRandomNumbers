@@ -31,25 +31,5 @@ Before proposing code, inspect the whole relevant project context, including `.i
 
 
 
-# Project task
 
-Target board: STM32H747I-DISCO with STM32H747XI dual-core MCU.
-
-This is an interview task. The firmware must, every 5 seconds:
-
-1. Generate exactly five random integer numbers.
-2. Each number must be in the inclusive range 256 to 511.
-3. Create one text line in this exact format:
-
-   `MM:SS N1, N2, N3, N4, N5`
-
-   Example:
-   `00:00 290, 401, 263, 510, 337`
-
-4. Append the line followed by a newline to the microSD-card file:
-   `file01.txt`
-5. Display the same line on the board’s built-in LCD.
-6. Send the same line through UART8.
-
-The timer starts at `00:00` when the firmware begins running. A new line is produced every 5 seconds: `00:00`, `00:05`, `00:10`, and so on.
 
