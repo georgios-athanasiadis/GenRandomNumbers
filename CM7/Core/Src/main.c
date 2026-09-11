@@ -15,7 +15,7 @@
   *
   ******************************************************************************
   */
-/* USER CODE END Header pc104 */
+/* USER CODE END Header*/
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "FreeRTOS.h"
@@ -1097,11 +1097,14 @@ static void taskGNSS(void *argument)
       continue;
     }
 
+    //DEBUG
     utcStatus = GNSS_GetUTC(&timeDate);
     dateStatus = GNSS_GetDate(&timeDate);
     latStatus = GNSS_GetLat(&position);
     lonStatus = GNSS_GetLon(&position);
 
+
+    //Ean kapio apo date,utc, lan,lon den einai HAL_OK
     if ((utcStatus != HAL_OK) ||
         (dateStatus != HAL_OK) ||
         (latStatus != HAL_OK) ||
@@ -1137,6 +1140,8 @@ static void taskGNSS(void *argument)
       continue;
     }
 
+
+    //Dixnonte sto display ean ta date,utc,lat,lon exoun ola to HAL_OK
     length = snprintf(
         message,
         sizeof(message),
