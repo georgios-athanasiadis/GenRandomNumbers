@@ -158,6 +158,7 @@ static void taskSDcard(void *argument);
 static void taskGNSS(void *argument);
 static void taskBMP(void *argument);
 static char *CounterToTimeString(int counter);
+static void SdMountError(char *buffer, size_t bufferSize, FRESULT fCode, uint32_t hCode);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -864,6 +865,92 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+static void SdMountError(char *buffer,
+                               size_t bufferSize,
+                               FRESULT fCode,
+                               uint32_t hCode)
+{
+  static const struct
+  {
+    uint32_t mask;
+    const char *name;
+  } errorNames[] = {
+    {HAL_SD_ERROR_CMD_CRC_FAIL,           "1"},
+    {HAL_SD_ERROR_DATA_CRC_FAIL,          "2"},
+    {HAL_SD_ERROR_CMD_RSP_TIMEOUT,        "3"},
+    {HAL_SD_ERROR_DATA_TIMEOUT,           "4"},
+    {HAL_SD_ERROR_TX_UNDERRUN,            "5"},
+    {HAL_SD_ERROR_RX_OVERRUN,             "6"},
+    {HAL_SD_ERROR_ADDR_MISALIGNED,        "7"},
+    {HAL_SD_ERROR_BLOCK_LEN_ERR,           "8"},
+    {HAL_SD_ERROR_ERASE_SEQ_ERR,           "9"},
+    {HAL_SD_ERROR_BAD_ERASE_PARAM,         "10"},
+    {HAL_SD_ERROR_WRITE_PROT_VIOLATION,    "11"},
+    {HAL_SD_ERROR_LOCK_UNLOCK_FAILED,      "12"},
+    {HAL_SD_ERROR_COM_CRC_FAILED,          "13"},
+    {HAL_SD_ERROR_ILLEGAL_CMD,             "14"},
+    {HAL_SD_ERROR_CARD_ECC_FAILED,         "15"},
+    {HAL_SD_ERROR_CC_ERR,                  "16"},
+    {HAL_SD_ERROR_GENERAL_UNKNOWN_ERR,     "17"},
+    {HAL_SD_ERROR_STREAM_READ_UNDERRUN,    "18"},
+    {HAL_SD_ERROR_STREAM_WRITE_OVERRUN,    "19"},
+    {HAL_SD_ERROR_CID_CSD_OVERWRITE,       "20"},
+    {HAL_SD_ERROR_WP_ERASE_SKIP,           "21"},
+    {HAL_SD_ERROR_CARD_ECC_DISABLED,       "22"},
+    {HAL_SD_ERROR_ERASE_RESET,             "23"},
+    {HAL_SD_ERROR_AKE_SEQ_ERR,             "24"},
+    {HAL_SD_ERROR_INVALID_VOLTRANGE,       "25"},
+    {HAL_SD_ERROR_ADDR_OUT_OF_RANGE,       "26"},
+    {HAL_SD_ERROR_REQUEST_NOT_APPLICABLE,  "27"},
+    {HAL_SD_ERROR_PARAM,                   "28"},
+    {HAL_SD_ERROR_UNSUPPORTED_FEATURE,     "29"},
+    {HAL_SD_ERROR_BUSY,                    "30"},
+    {HAL_SD_ERROR_DMA,                     "31"},
+    {HAL_SD_ERROR_TIMEOUT,                 "32"}
+  };
+
+  size_t i;
+  uint8_t first = 1U;
+
+  if (bufferSize == 0U)
+  {
+    return;
+  }
+
+  (void)snprintf(buffer, bufferSize,
+                 "SD, F-Code:%u, H-code:0x%08lX:",
+                 (unsigned int)fCode,
+                 (unsigned long)hCode);
+
+  if (hCode == HAL_SD_ERROR_NONE)
+  {
+    size_t used = strlen(buffer);
+    (void)snprintf(buffer + used, bufferSize - used, "NONE");
+    return;
+  }
+
+  for (i = 0U; i < (sizeof(errorNames) / sizeof(errorNames[0])); i++)
+  {
+    if ((hCode & errorNames[i].mask) != 0U)
+    {
+      size_t used = strlen(buffer);
+
+      if (used >= (bufferSize - 1U))
+      {
+        break;
+      }
+
+      (void)snprintf(buffer + used, bufferSize - used,
+                     "%s%s",
+                     first ? "" : ",",
+                     errorNames[i].name);
+
+      first = 0U;
+    }
+  }
+}
+
+
 static char *CounterToTimeString(int counter)
 {
   static char timeString[12];
@@ -991,7 +1078,8 @@ static void taskSDcard(void *argument)
           }
           else
           {
-            statusMessage = "SD card mount failed";
+        	  SdMountError(line, sizeof(line), result, hsd1.ErrorCode);
+			  statusMessage = line;
           }
         }
       }
