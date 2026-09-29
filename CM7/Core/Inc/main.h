@@ -63,8 +63,6 @@ void Error_Handler(void);
 #define FMC_NBL3_GPIO_Port GPIOI
 #define FMC_NBL2_Pin GPIO_PIN_4
 #define FMC_NBL2_GPIO_Port GPIOI
-#define JOY_RIGHT_Pin GPIO_PIN_5
-#define JOY_RIGHT_GPIO_Port GPIOK
 #define SDIO1_D2_Pin GPIO_PIN_10
 #define SDIO1_D2_GPIO_Port GPIOC
 #define FMC_D25_Pin GPIO_PIN_1
@@ -79,8 +77,6 @@ void Error_Handler(void);
 #define JOY_LEFT_GPIO_Port GPIOK
 #define Audio_INT_Pin GPIO_PIN_15
 #define Audio_INT_GPIO_Port GPIOJ
-#define SDIO1_D3_Pin GPIO_PIN_11
-#define SDIO1_D3_GPIO_Port GPIOC
 #define FMC_D26_Pin GPIO_PIN_2
 #define FMC_D26_GPIO_Port GPIOI
 #define FMC_D23_Pin GPIO_PIN_15
@@ -127,8 +123,6 @@ void Error_Handler(void);
 #define FMC_D3_GPIO_Port GPIOD
 #define SDIO1_D0_Pin GPIO_PIN_8
 #define SDIO1_D0_GPIO_Port GPIOC
-#define SDIO1_D1_Pin GPIO_PIN_9
-#define SDIO1_D1_GPIO_Port GPIOC
 #define CEC_CK_MCO1_Pin GPIO_PIN_8
 #define CEC_CK_MCO1_GPIO_Port GPIOA
 #define FMC_D31_Pin GPIO_PIN_10
@@ -143,8 +137,6 @@ void Error_Handler(void);
 #define FMC_A0_GPIO_Port GPIOF
 #define LED1_Pin GPIO_PIN_12
 #define LED1_GPIO_Port GPIOI
-#define LED2_Pin GPIO_PIN_13
-#define LED2_GPIO_Port GPIOI
 #define LED3_Pin GPIO_PIN_14
 #define LED3_GPIO_Port GPIOI
 #define FMC_A3_Pin GPIO_PIN_3

@@ -285,22 +285,28 @@ void HAL_SD_MspInit(SD_HandleTypeDef* hsd)
     __HAL_RCC_SDMMC1_CLK_ENABLE();
 
     __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_GPIOD_CLK_ENABLE();
     /**SDMMC1 GPIO Configuration
     PC10     ------> SDMMC1_D2
-    PC11     ------> SDMMC1_D3
     PC12     ------> SDMMC1_CK
+    PB8     ------> SDMMC1_CKIN
     PD2     ------> SDMMC1_CMD
     PC8     ------> SDMMC1_D0
-    PC9     ------> SDMMC1_D1
     */
-    GPIO_InitStruct.Pin = SDIO1_D2_Pin|SDIO1_D3_Pin|SDIO1_CK_Pin|SDIO1_D0_Pin
-                          |SDIO1_D1_Pin;
+    GPIO_InitStruct.Pin = SDIO1_D2_Pin|SDIO1_CK_Pin|SDIO1_D0_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF12_SDIO1;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_8;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF7_SDIO1;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     GPIO_InitStruct.Pin = SDIO1_CMD_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
@@ -338,14 +344,14 @@ void HAL_SD_MspDeInit(SD_HandleTypeDef* hsd)
 
     /**SDMMC1 GPIO Configuration
     PC10     ------> SDMMC1_D2
-    PC11     ------> SDMMC1_D3
     PC12     ------> SDMMC1_CK
+    PB8     ------> SDMMC1_CKIN
     PD2     ------> SDMMC1_CMD
     PC8     ------> SDMMC1_D0
-    PC9     ------> SDMMC1_D1
     */
-    HAL_GPIO_DeInit(GPIOC, SDIO1_D2_Pin|SDIO1_D3_Pin|SDIO1_CK_Pin|SDIO1_D0_Pin
-                          |SDIO1_D1_Pin);
+    HAL_GPIO_DeInit(GPIOC, SDIO1_D2_Pin|SDIO1_CK_Pin|SDIO1_D0_Pin);
+
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8);
 
     HAL_GPIO_DeInit(SDIO1_CMD_GPIO_Port, SDIO1_CMD_Pin);
 
@@ -386,12 +392,20 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     /* Peripheral clock enable */
     __HAL_RCC_UART4_CLK_ENABLE();
 
+    __HAL_RCC_GPIOC_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
     /**UART4 GPIO Configuration
+    PC11     ------> UART4_RX
     PB9     ------> UART4_TX
-    PB8     ------> UART4_RX
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_9|GPIO_PIN_8;
+    GPIO_InitStruct.Pin = GPIO_PIN_11;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF8_UART4;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_9;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -490,10 +504,12 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
     __HAL_RCC_UART4_CLK_DISABLE();
 
     /**UART4 GPIO Configuration
+    PC11     ------> UART4_RX
     PB9     ------> UART4_TX
-    PB8     ------> UART4_RX
     */
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_9|GPIO_PIN_8);
+    HAL_GPIO_DeInit(GPIOC, GPIO_PIN_11);
+
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_9);
 
     /* USER CODE BEGIN UART4_MspDeInit 1 */
 
