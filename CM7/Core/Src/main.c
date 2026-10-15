@@ -1094,7 +1094,7 @@ static void taskSDcard(void *argument)
         retSD = FATFS_LinkDriver(&SD_Driver, SDPath);
 
         sdCardMounted = 0U;
-        statusMessage = "Please insert SD card";
+        statusMessage = "Please insert SD card!!";
       }
 
       if (statusMessage != NULL)
